@@ -1,0 +1,26 @@
+<?php
+
+namespace {{ namespace }};
+
+use LaravelCQRS\Command;
+use LaravelCQRS\Contracts\{{ handlerInterface }};
+use {{ commandOrQueryNamespace }};
+
+class {{ class }} implements {{ handlerInterface }}
+{
+    /**
+     * Handle the command.
+     *
+     * @param Command $command
+     * @return mixed
+     */
+    public function handle(Command $command): mixed
+    {
+        /** @var \{{ commandOrQueryNamespace }} $command */
+        
+        // Add your command handling logic here
+        
+        return null;
+    }
+}
+

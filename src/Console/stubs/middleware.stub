@@ -1,0 +1,29 @@
+<?php
+
+namespace {{ namespace }};
+
+use Closure;
+use LaravelCQRS\Contracts\MiddlewareInterface;
+use LaravelCQRS\Command;
+use LaravelCQRS\Query;
+
+class {{ class }} implements MiddlewareInterface
+{
+    /**
+     * Handle the command/query and call the next middleware in the pipeline.
+     *
+     * @param Command|Query $commandOrQuery
+     * @param Closure $next
+     * @return mixed
+     */
+    public function handle(Command|Query $commandOrQuery, Closure $next): mixed
+    {
+        // Add your middleware logic before the handler (e.g. logging, authorization)
+
+        $result = $next($commandOrQuery);
+
+        // Add your middleware logic after the handler if needed
+
+        return $result;
+    }
+}

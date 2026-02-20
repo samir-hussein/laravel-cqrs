@@ -1,0 +1,44 @@
+<?php
+
+namespace {{ namespace }};
+
+use LaravelCQRS\Query;
+
+class {{ class }} extends Query
+{
+    /**
+     * Create a new query instance.
+     *
+     * @param array $data
+     */
+    public function __construct(array $data = [])
+    {
+        parent::__construct($data);
+    }
+
+    /**
+     * Get validation rules for this query.
+     *
+     * @return array
+     */
+    public function rules(): array
+    {
+        return [
+            // Add your validation rules here
+            // Example: 'id' => ['required', 'integer', 'min:1'],
+        ];
+    }
+
+    /**
+     * Get custom validation messages (optional).
+     *
+     * @return array
+     */
+    public function messages(): array
+    {
+        return [
+            // Add custom messages here
+        ];
+    }
+}
+

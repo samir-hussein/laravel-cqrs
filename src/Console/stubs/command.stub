@@ -1,0 +1,44 @@
+<?php
+
+namespace {{ namespace }};
+
+use LaravelCQRS\Command;
+
+class {{ class }} extends Command
+{
+    /**
+     * Create a new command instance.
+     *
+     * @param array $data
+     */
+    public function __construct(array $data = [])
+    {
+        parent::__construct($data);
+    }
+
+    /**
+     * Get validation rules for this command.
+     *
+     * @return array
+     */
+    public function rules(): array
+    {
+        return [
+            // Add your validation rules here
+            // Example: 'name' => ['required', 'string', 'max:255'],
+        ];
+    }
+
+    /**
+     * Get custom validation messages (optional).
+     *
+     * @return array
+     */
+    public function messages(): array
+    {
+        return [
+            // Add custom messages here
+        ];
+    }
+}
+
