@@ -1,76 +1,120 @@
-# Laravel CQRS Package
+# Laravel CQRS
 
-A clean and simple CQRS (Command Query Responsibility Segregation) pattern implementation for Laravel applications.
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/samir-hussein/laravel-cqrs.svg?style=flat-square)](https://packagist.org/packages/samir-hussein/laravel-cqrs)
+[![License](https://img.shields.io/packagist/l/samir-hussein/laravel-cqrs.svg?style=flat-square)](https://packagist.org/packages/samir-hussein/laravel-cqrs)
 
-## Features
+**CQRS (Command Query Responsibility Segregation) for Laravel** — separate writes (commands) from reads (queries), route both through a predictable pipeline (validation → middleware → handler), and resolve handlers automatically from naming conventions or explicit mappings.
 
-- ✅ **Simple & Clean**: Easy to understand and implement
-- ✅ **Auto-resolution**: Handlers are automatically resolved based on naming conventions
-- ✅ **Laravel Integration**: Seamless integration with Laravel's service container
-- ✅ **Type-safe**: Full type hints and interfaces
-- ✅ **Flexible**: Works with any Laravel project structure
-- ✅ **Validation Support**: Built-in validation methods for commands and queries
-- ✅ **Middleware Pipeline**: Wrap handlers with middleware for logging, transactions, authorization, etc.
-- ✅ **Universal Dispatch**: Single `dispatch()` method that works with both Commands and Queries
+This package gives you a **small, opinionated surface area**: two buses, one helper, convention-based handler resolution, optional Laravel validation on messages, and a **middleware pipeline** for cross-cutting behavior — without pulling in event sourcing or heavy infrastructure.
+
+---
+
+## Table of contents
+
+- [Why use this package](#why-use-this-package)
+- [What you get](#what-you-get)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Concepts](#concepts)
+- [Quick start](#quick-start)
+- [Handler resolution](#handler-resolution)
+- [The `CQRS` helper](#the-cqrs-helper)
+- [Command and query base classes](#command-and-query-base-classes)
+- [Validation](#validation)
+- [Middleware pipeline](#middleware-pipeline)
+- [Using the buses directly](#using-the-buses-directly)
+- [Automatic request data (controllers)](#automatic-request-data-controllers)
+- [Configuration reference](#configuration-reference)
+- [Artisan commands](#artisan-commands)
+- [Package architecture](#package-architecture)
+- [Exceptions](#exceptions)
+- [License](#license)
+- [Changelog](#changelog)
+
+---
+
+## Why use this package
+
+- **Clear boundaries**: Commands change state; queries return data. That separation scales with team size and keeps controllers thin.
+- **One entry point**: `CQRS::dispatch()` works for both commands and queries — validate once, then run the pipeline.
+- **Laravel-native**: Uses the container, config, validator, and optional controller injection of `Command` / `Query` instances.
+- **Extensible without clutter**: Global and per-message middleware for logging, DB transactions, authorization, caching reads, etc.
+- **Flexible routing to handlers**: Convention by default; override specific handlers via config when names or folders do not match.
+
+---
+
+## What you get
+
+| Area | Details |
+|------|---------|
+| **Core types** | `Command`, `Query` base classes with data access and validation hooks |
+| **Buses** | `CommandBus`, `QueryBus` (singletons) resolving handlers and running the pipeline |
+| **Facade-style API** | `LaravelCQRS\CQRS` static methods for dispatch with/without validation |
+| **Contracts** | `CommandHandlerInterface`, `QueryHandlerInterface`, `MiddlewareInterface` |
+| **Pipeline** | `Pipeline` executes middleware; middleware may be classes or container-resolved class names |
+| **Config** | Namespaces, auto-resolve toggle, handler mappings, middleware stacks |
+| **Generators** | `cqrs:command`, `cqrs:query`, `cqrs:handler`, `cqrs:middleware` |
+| **Exceptions** | `HandlerNotFoundException`, `InvalidHandlerException` |
+
+---
+
+## Requirements
+
+- PHP **≥ 8.0**
+- Laravel **≥ 9** (`illuminate/*` packages as declared in `composer.json`)
+
+---
 
 ## Installation
-
-### Step 1: Install via Composer
 
 ```bash
 composer require samir-hussein/laravel-cqrs
 ```
 
-The package will be automatically discovered by Laravel.
+Laravel will auto-discover `LaravelCQRS\CQRSServiceProvider`.
 
-### Step 2: Publish Configuration (Optional)
+Publish configuration (recommended for production apps):
 
 ```bash
 php artisan vendor:publish --tag=cqrs-config
 ```
 
-This creates `config/cqrs.php` where you can configure namespaces, middleware, and handler mappings.
+This creates `config/cqrs.php`.
 
-### Step 3: Create Directory Structure (Optional)
+---
 
-The package will create directories automatically when you use Artisan commands. Or create them manually:
+## Concepts
+
+- **Command**: An intent to change application state (create user, place order). Typically handled once, side effects allowed.
+- **Query**: A read model request (get user by id, list products). No state change in the CQRS sense; return a result.
+- **Handler**: A class that implements `CommandHandlerInterface` or `QueryHandlerInterface` and contains the use-case logic.
+- **Flow**: `Controller → CQRS::dispatch() → [validate] → CommandBus/QueryBus → middleware pipeline → handler.handle() → result`
 
 ```
-app/
-├── CQRS/
-│   ├── Commands/
-│   ├── Queries/
-│   └── Handlers/
+HTTP Request
+    → Controller
+        → CQRS::dispatch($message)  // validates if rules() non-empty
+            → Bus
+                → Middleware (global, then per-message)
+                    → Handler::handle($message)
+                        → Domain / repositories / models
+                            → mixed result
 ```
 
-### Step 4: Use Artisan Commands (Recommended)
+---
 
-The package includes Artisan commands to generate CQRS files:
+## Quick start
+
+### 1. Command + handler
+
+**Generate files:**
 
 ```bash
-# Create a command
 php artisan cqrs:command User/CreateUserCommand
-
-# Create a query
-php artisan cqrs:query User/GetUserQuery
-
-# Create a command handler
 php artisan cqrs:handler User/CreateUserCommandHandler --type=command
-
-# Create a query handler
-php artisan cqrs:handler User/GetUserQueryHandler --type=query
-
-# Create a pipeline middleware
-php artisan cqrs:middleware User/TransactionMiddleware
 ```
 
-That's it! You're ready to use the package.
-
-## Example 1: Creating and Using a Command
-
-This example shows how to create a command with validation and middleware support.
-
-### 1. Create the Command
+**Command** (`app/CQRS/Commands/User/CreateUserCommand.php`):
 
 ```php
 <?php
@@ -81,595 +125,384 @@ use LaravelCQRS\Command;
 
 class CreateUserCommand extends Command
 {
-    /**
-     * Create a new command instance.
-     *
-     * @param array $data
-     */
-    public function __construct(array $data = [])
-    {
-        parent::__construct($data);
-    }
-
-    public function getName(): ?string
-    {
-        return $this->get('name');
-    }
-
-    public function getEmail(): ?string
-    {
-        return $this->get('email');
-    }
-
-    public function getPassword(): ?string
-    {
-        return $this->get('password');
-    }
-
-    /**
-     * Define validation rules
-     */
     public function rules(): array
     {
         return [
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
-        ];
-    }
-
-    /**
-     * Custom validation messages (optional)
-     */
-    public function messages(): array
-    {
-        return [
-            'email.unique' => 'This email address is already registered.',
-            'password.min' => 'Password must be at least 8 characters.',
+            'email' => ['required', 'email'],
         ];
     }
 }
 ```
 
-### 2. Create the Command Handler
-
-**Using Artisan (Recommended):**
-```bash
-php artisan cqrs:handler User/CreateUserCommandHandler --type=command
-```
-
-**Or manually create the file:**
+**Handler** (`app/CQRS/Handlers/User/CreateUserCommandHandler.php`):
 
 ```php
 <?php
 
 namespace App\CQRS\Handlers\User;
 
-use App\Models\User;
-use App\Repositories\UserRepository;
+use App\CQRS\Commands\User\CreateUserCommand;
 use LaravelCQRS\Command;
-use LaravelCQRS\Commands\User\CreateUserCommand;
 use LaravelCQRS\Contracts\CommandHandlerInterface;
-use Illuminate\Support\Facades\Hash;
 
 class CreateUserCommandHandler implements CommandHandlerInterface
 {
-    public function __construct(
-        private UserRepository $userRepository
-    ) {}
-
-    public function handle(Command $command): User
+    public function handle(Command $command): mixed
     {
         /** @var CreateUserCommand $command */
-        $data = $command->getData();
-        
-        // Hash password before creating user
-        if (isset($data['password'])) {
-            $data['password'] = Hash::make($data['password']);
-        }
-
-        return $this->userRepository->create($data);
+        return $command->getData(); // replace with real persistence
     }
 }
 ```
 
-### 3. Configure Middleware (Optional)
-
-Add middleware in `config/cqrs.php`:
+**Controller:**
 
 ```php
-'middleware' => [
-    'global' => [
-        \App\CQRS\Middleware\LoggingMiddleware::class,
-    ],
-    'App\CQRS\Commands\User\CreateUserCommand' => [
-        \App\CQRS\Middleware\TransactionMiddleware::class,
-        \App\CQRS\Middleware\AuthorizationMiddleware::class,
-    ],
-],
-```
-
-### 4. Use in Controller
-
-```php
-<?php
-
-namespace App\Http\Controllers;
-
 use App\CQRS\Commands\User\CreateUserCommand;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use LaravelCQRS\CQRS;
 
-class UserController extends Controller
-{
-    // Option 1: Manual instantiation (traditional way)
-    public function store(Request $request): JsonResponse
-    {
-        // CQRS::dispatch() automatically:
-        // 1. Validates the command (using rules() method)
-        // 2. Applies middleware (if configured)
-        // 3. Dispatches to the handler
-        $user = CQRS::dispatch(new CreateUserCommand($request->all()));
-
-        return response()->json($user, 201);
-    }
-
-    // Option 2: Automatic dependency injection (recommended)
-    public function create(CreateUserCommand $command): JsonResponse
-    {
-        // The command is automatically instantiated with request data
-        // No need to manually pass $request->all()
-        $user = CQRS::dispatch($command);
-
-        return response()->json($user, 201);
-    }
-}
+$user = CQRS::dispatch(new CreateUserCommand($request->all()));
 ```
 
-**What happens:**
-1. ✅ **Validation**: Command data is validated using `rules()` method
-2. ✅ **Middleware**: Global and command-specific middleware are executed
-3. ✅ **Handler**: `CreateUserCommandHandler` processes the command
-4. ✅ **Response**: User is created and returned
+### 2. Query + handler
 
-## Example 2: Creating and Using a Query
-
-This example shows how to create a query with validation and middleware support.
-
-### 1. Create the Query
-
-**Using Artisan (Recommended):**
 ```bash
 php artisan cqrs:query User/GetUserQuery
-```
-
-**Or manually create the file:**
-
-```php
-<?php
-
-namespace App\CQRS\Queries\User;
-
-use LaravelCQRS\Query;
-
-class GetUserQuery extends Query
-{
-    /**
-     * Create a new query instance.
-     *
-     * @param array $data
-     */
-    public function __construct(array $data = [])
-    {
-        parent::__construct($data);
-    }
-
-    public function getId(): int|string|null
-    {
-        return $this->get('id');
-    }
-
-    /**
-     * Define validation rules
-     */
-    public function rules(): array
-    {
-        return [
-            'id' => ['required', 'integer', 'min:1'],
-        ];
-    }
-
-    /**
-     * Custom validation messages (optional)
-     */
-    public function messages(): array
-    {
-        return [
-            'id.required' => 'User ID is required.',
-            'id.integer' => 'User ID must be a valid number.',
-        ];
-    }
-}
-```
-
-### 2. Create the Query Handler
-
-**Using Artisan (Recommended):**
-```bash
 php artisan cqrs:handler User/GetUserQueryHandler --type=query
 ```
 
-**Or manually create the file:**
+Dispatch the same way:
 
 ```php
-<?php
-
-namespace App\CQRS\Handlers\User;
-
-use App\Models\User;
-use App\Repositories\UserRepository;
-use LaravelCQRS\Contracts\QueryHandlerInterface;
-use LaravelCQRS\Query;
-use LaravelCQRS\Queries\User\GetUserQuery;
-
-class GetUserQueryHandler implements QueryHandlerInterface
-{
-    public function __construct(
-        private UserRepository $userRepository
-    ) {}
-
-    public function handle(Query $query): ?User
-    {
-        /** @var GetUserQuery $query */
-        return $this->userRepository->find($query->getId());
-    }
-}
-```
-
-### 3. Configure Middleware (Optional)
-
-Add middleware in `config/cqrs.php`:
-
-```php
-'middleware' => [
-    'global' => [
-        \App\CQRS\Middleware\LoggingMiddleware::class,
-    ],
-    'App\CQRS\Queries\User\GetUserQuery' => [
-        \App\CQRS\Middleware\CacheMiddleware::class, // Cache query results
-    ],
-],
-```
-
-### 4. Use in Controller
-
-```php
-<?php
-
-namespace App\Http\Controllers;
-
 use App\CQRS\Queries\User\GetUserQuery;
-use Illuminate\Http\JsonResponse;
 use LaravelCQRS\CQRS;
 
-class UserController extends Controller
-{
-    public function show(string $id): JsonResponse
-    {
-        // CQRS::dispatch() automatically:
-        // 1. Validates the query (using rules() method)
-        // 2. Applies middleware (if configured - e.g., caching)
-        // 3. Dispatches to the handler
-        // Option 1: Manual instantiation
-        $user = CQRS::dispatch(new GetUserQuery(['id' => $id]));
-
-        // Option 2: Automatic dependency injection (recommended)
-        // public function show(GetUserQuery $query): JsonResponse
-        // {
-        //     $user = CQRS::dispatch($query);
-        //     return response()->json($user);
-        // }
-
-        if (!$user) {
-            return response()->json(['error' => 'User not found'], 404);
-        }
-
-        return response()->json($user);
-    }
-}
+$user = CQRS::dispatch(new GetUserQuery(['id' => $id]));
 ```
 
-**What happens:**
-1. ✅ **Validation**: Query parameters are validated using `rules()` method
-2. ✅ **Middleware**: Global and query-specific middleware are executed (e.g., caching)
-3. ✅ **Handler**: `GetUserQueryHandler` processes the query
-4. ✅ **Response**: User data is returned (or 404 if not found)
+---
+
+## Handler resolution
+
+Resolution order:
+
+1. **`config('cqrs.handler_mappings')`** — if the command/query class is a key, that handler class is used.
+2. If **no mapping** and **`auto_resolve_handlers` is `false`**, a `HandlerNotFoundException` is thrown.
+3. Otherwise **auto-resolution** uses `command_namespace`, `query_namespace`, and `handler_namespace` from config:
+   - `App\CQRS\Commands\User\CreateUserCommand` → `App\CQRS\Handlers\User\CreateUserCommandHandler`
+   - `App\CQRS\Queries\User\GetUserQuery` → `App\CQRS\Handlers\User\GetUserQueryHandler`
+4. If namespaces do not match, the bus **falls back** to string replacement (`Commands` → `Handlers`, `Command` → `CommandHandler`, etc.).
+
+Mappings always win — useful for legacy handlers or one-off overrides.
+
+---
+
+## The `CQRS` helper
+
+All methods live on `LaravelCQRS\CQRS`.
+
+| Method | Purpose |
+|--------|---------|
+| `dispatch(Command\|Query $m, bool $validate = true)` | Validates (if `$validate` and `rules()` not empty), then routes to `CommandBus` or `QueryBus`. |
+| `dispatchWithoutValidation(Command\|Query $m)` | Same as `dispatch($m, false)`. |
+| `dispatchCommand(Command $c, bool $validate = true)` | Command only. |
+| `dispatchCommandWithoutValidation(Command $c)` | Command, no validation. |
+| `dispatchQuery(Query $q, bool $validate = true)` | Query only. |
+| `dispatchQueryWithoutValidation(Query $q)` | Query, no validation. |
+
+Validation uses Laravel’s validator; failures throw `Illuminate\Validation\ValidationException`.
+
+---
+
+## Command and query base classes
+
+`LaravelCQRS\Command` and `LaravelCQRS\Query` share the same data and validation API.
+
+**Data:**
+
+| Method | Description |
+|--------|-------------|
+| `getData(): array` | Full payload. |
+| `get(string $key, mixed $default = null): mixed` | Single value. |
+| `set(string $key, mixed $value): self` | Mutable payload (e.g. from middleware). |
+| `has(string $key): bool` | Key isset. |
+| `toObject(): object` | Recursive array → object (indexed arrays preserved as arrays). |
+
+**Validation (override in subclasses):**
+
+| Method | Default |
+|--------|---------|
+| `rules(): array` | `[]` — no rules means `validate()` returns raw data unchanged. |
+| `messages(): array` | Custom rule messages. |
+| `attributes(): array` | Custom attribute names for errors. |
+
+**Execution:**
+
+| Method | Description |
+|--------|-------------|
+| `validate(): array` | Runs validator; throws `ValidationException` on failure; returns validated data. |
+| `isValid(): bool` | Non-throwing check. |
+| `errors(): MessageBag` | Errors without throwing. |
+
+---
 
 ## Validation
 
-Commands and Queries support built-in validation. Override these methods in your command/query classes:
+### Recommended: validate through `CQRS::dispatch()`
 
-- `rules(): array` - Define validation rules
-- `messages(): array` - Custom error messages (optional)
-- `attributes(): array` - Custom attribute names (optional)
+Define `rules()` (and optionally `messages()`, `attributes()`) on the command or query. Call:
 
-The `CQRS::dispatch()` method automatically validates before dispatching. If validation fails, a `ValidationException` is thrown.
+```php
+CQRS::dispatch(new CreateUserCommand($request->all()));
+```
 
-**Manual validation:**
+### Manual or layered checks
+
 ```php
 $command = new CreateUserCommand($request->all());
 
-// Check if valid
-if ($command->isValid()) {
-    // Get errors
-    $errors = $command->errors();
+if (! $command->isValid()) {
+    return response()->json(['errors' => $command->errors()], 422);
 }
 
-// Or validate and get validated data
-$validatedData = $command->validate();
+$validated = $command->validate(); // or dispatch after manual validate()
 ```
 
-See [VALIDATION_USAGE.md](VALIDATION_USAGE.md) for complete validation guide.
+### Validate inside a handler
 
-## Middleware
-
-Middleware allows you to wrap handler execution for cross-cutting concerns:
-
-- **Logging**: Log all command/query executions
-- **Transactions**: Wrap database operations in transactions
-- **Authorization**: Check permissions before execution
-- **Caching**: Cache query results
-- **Performance Monitoring**: Track execution time
-
-**Create middleware:**
 ```php
-<?php
+public function handle(Command $command): mixed
+{
+    $data = $command->validate();
 
-namespace App\CQRS\Middleware;
+    // use $data
+}
+```
 
+### With Laravel Form Requests
+
+You can validate at the HTTP layer and pass only validated data into the command:
+
+```php
+public function store(CreateUserRequest $request): JsonResponse
+{
+    $user = CQRS::dispatch(new CreateUserCommand($request->validated()));
+
+    return response()->json($user, 201);
+}
+```
+
+Use **Form Requests** for HTTP-specific rules; use **command/query `rules()`** for message invariants that belong with the use case.
+
+---
+
+## Middleware pipeline
+
+Middleware wraps **handler** execution: global middleware first (in order), then middleware listed for that command/query class (in order). Implementation: `LaravelCQRS\Pipeline`.
+
+### Interface
+
+```php
 use LaravelCQRS\Command;
 use LaravelCQRS\Contracts\MiddlewareInterface;
 use LaravelCQRS\Query;
 use Closure;
-use Illuminate\Support\Facades\DB;
 
-class TransactionMiddleware implements MiddlewareInterface
+class LoggingMiddleware implements MiddlewareInterface
 {
     public function handle(Command|Query $commandOrQuery, Closure $next): mixed
     {
-        if ($commandOrQuery instanceof Command) {
-            return DB::transaction(function () use ($commandOrQuery, $next) {
-                return $next($commandOrQuery);
-            });
-        }
-        
+        logger()->info(get_class($commandOrQuery), $commandOrQuery->getData());
+
         return $next($commandOrQuery);
     }
 }
 ```
 
-**Configure in `config/cqrs.php`:**
+Config accepts **class names**; the pipeline resolves them from the container. Instances may also be used if your stack provides them.
+
+### Example: database transaction (commands only)
+
 ```php
+use Illuminate\Support\Facades\DB;
+
+public function handle(Command|Query $commandOrQuery, Closure $next): mixed
+{
+    if ($commandOrQuery instanceof Command) {
+        return DB::transaction(fn () => $next($commandOrQuery));
+    }
+
+    return $next($commandOrQuery);
+}
+```
+
+### Example: cache key from payload
+
+Use `getData()` for serialization (there is no `toArray()` on the base classes):
+
+```php
+$key = 'cqrs:' . get_class($commandOrQuery) . ':' . md5(json_encode($commandOrQuery->getData()));
+```
+
+### Configuration
+
+```php
+// config/cqrs.php
 'middleware' => [
     'global' => [
         \App\CQRS\Middleware\LoggingMiddleware::class,
     ],
-    'App\CQRS\Commands\User\CreateUserCommand' => [
+    \App\CQRS\Commands\User\CreateUserCommand::class => [
         \App\CQRS\Middleware\TransactionMiddleware::class,
     ],
 ],
 ```
 
-See [MIDDLEWARE_USAGE.md](MIDDLEWARE_USAGE.md) for complete middleware guide.
+Execution order: **global middleware → per-message middleware → handler**.
 
-## Naming Conventions
+---
 
-The package automatically resolves handlers based on naming:
+## Using the buses directly
 
-- **Command**: `App\CQRS\Commands\User\CreateUserCommand`
-- **Handler**: `App\CQRS\Handlers\User\CreateUserCommandHandler`
-
-- **Query**: `App\CQRS\Queries\User\GetUserQuery`
-- **Handler**: `App\CQRS\Handlers\User\GetUserQueryHandler`
-
-## Configuration
-
-After installing the package, publish the configuration file:
-
-```bash
-php artisan vendor:publish --tag=cqrs-config
-```
-
-This creates `config/cqrs.php` with all available options. Here's a detailed explanation of each configuration option:
-
-### Handler Namespace
+Inject `LaravelCQRS\Bus\CommandBus` or `LaravelCQRS\Bus\QueryBus`. They do **not** run `CQRS::dispatch()` validation — validate yourself if needed:
 
 ```php
-'handler_namespace' => env('CQRS_HANDLER_NAMESPACE', 'App\\CQRS\\Handlers'),
+use LaravelCQRS\Bus\CommandBus;
+
+public function __construct(private CommandBus $commandBus) {}
+
+public function store(Request $request): JsonResponse
+{
+    $command = new CreateUserCommand($request->all());
+    $command->validate();
+
+    $result = $this->commandBus->dispatch($command);
+
+    return response()->json($result, 201);
+}
 ```
 
-The base namespace where your handler classes are located. Used for auto-resolution when handlers follow the naming convention.
+---
 
-**Example:** If your handler is at `App\CQRS\Handlers\User\CreateUserCommandHandler`, set this to `App\CQRS\Handlers`.
+## Automatic request data (controllers)
 
-### Command Namespace
+When a `Command` or `Query` is **type-hinted** in a controller action and its internal `data` is still empty, the service provider merges the current request’s input and route parameters into the object. That lets you write:
 
 ```php
-'command_namespace' => env('CQRS_COMMAND_NAMESPACE', 'App\\CQRS\\Commands'),
+public function store(CreateUserCommand $command): JsonResponse
+{
+    return response()->json(CQRS::dispatch($command), 201);
+}
 ```
 
-The base namespace where your command classes are located. Used to determine if a class is a command for handler resolution.
+If you construct the message manually with an array, that behavior is skipped. In console or when no request exists, injection is safely ignored.
 
-**Example:** If your commands are at `App\CQRS\Commands\User\CreateUserCommand`, set this to `App\CQRS\Commands`.
+---
 
-### Query Namespace
+## Configuration reference
 
-```php
-'query_namespace' => env('CQRS_QUERY_NAMESPACE', 'App\\CQRS\\Queries'),
-```
+Environment keys mirror `config/cqrs.php`:
 
-The base namespace where your query classes are located. Used to determine if a class is a query for handler resolution.
+| Key | Purpose |
+|-----|---------|
+| `handler_namespace` | Base namespace for handler classes (`App\CQRS\Handlers`). |
+| `command_namespace` | Base namespace for commands (`App\CQRS\Commands`). |
+| `query_namespace` | Base namespace for queries (`App\CQRS\Queries`). |
+| `middleware_namespace` | Used by `cqrs:middleware` for default output namespace (`App\CQRS\Middleware`). |
+| `auto_resolve_handlers` | `true`: resolve by convention/mapping; `false`: mappings required (or exception). |
+| `handler_mappings` | `['Full\\Command\\Class' => 'Full\\Handler\\Class', ...]` — highest priority. |
+| `middleware` | `global` array + optional keys per **fully qualified** command/query class name. |
 
-**Example:** If your queries are at `App\CQRS\Queries\User\GetUserQuery`, set this to `App\CQRS\Queries`.
-
-### Auto-resolve Handlers
-
-```php
-'auto_resolve_handlers' => env('CQRS_AUTO_RESOLVE', true),
-```
-
-When `true` (default), handlers are automatically resolved based on naming conventions. When `false`, you must provide handler mappings for all commands/queries, otherwise an exception will be thrown.
-
-**Use cases:**
-- Set to `false` if you want explicit control over handler resolution
-- Set to `true` for automatic resolution (recommended for most cases)
-
-### Handler Mappings
-
-```php
-'handler_mappings' => [
-    'App\CQRS\Commands\User\CreateUserCommand' => 'App\Custom\Handlers\CreateUserHandler',
-    'App\CQRS\Queries\User\GetUserQuery' => 'App\Legacy\Handlers\GetUserHandler',
-],
-```
-
-Manual mappings for commands/queries to handlers. These mappings **always take precedence** over auto-resolution, even when `auto_resolve_handlers` is `true`.
-
-**Use cases:**
-- Custom handler locations that don't follow naming conventions
-- Override default handler resolution for specific commands/queries
-- Legacy handlers in different namespaces
-- Works alongside auto-resolution (checked first, then falls back to auto)
-
-**Important:** If `auto_resolve_handlers` is `false` and no mapping exists for a command/query, a `HandlerNotFoundException` will be thrown.
-
-### Middleware
-
-```php
-'middleware' => [
-    'global' => [
-        \App\CQRS\Middleware\LoggingMiddleware::class,
-        \App\CQRS\Middleware\TransactionMiddleware::class,
-    ],
-    'App\CQRS\Commands\User\CreateUserCommand' => [
-        \App\CQRS\Middleware\AuthorizationMiddleware::class,
-    ],
-    'App\CQRS\Queries\User\GetUserQuery' => [
-        \App\CQRS\Middleware\CacheMiddleware::class,
-    ],
-],
-```
-
-Configure middleware for commands and queries:
-
-- **`global`**: Middleware that applies to all commands and queries
-- **Command/Query specific**: Middleware that applies only to a specific command or query class
-
-**Execution order:** Global middleware runs first, then command/query-specific middleware.
-
-**Example middleware use cases:**
-- **Logging**: Log all command/query executions
-- **Transactions**: Wrap database operations in transactions
-- **Authorization**: Check permissions before execution
-- **Caching**: Cache query results
-- **Performance Monitoring**: Track execution time
-
-See [MIDDLEWARE_USAGE.md](MIDDLEWARE_USAGE.md) for complete middleware guide.
-
-### Environment Variables
-
-You can override configuration values using environment variables in your `.env` file:
+Example `.env` overrides:
 
 ```env
 CQRS_HANDLER_NAMESPACE=App\CQRS\Handlers
 CQRS_COMMAND_NAMESPACE=App\CQRS\Commands
 CQRS_QUERY_NAMESPACE=App\CQRS\Queries
+CQRS_MIDDLEWARE_NAMESPACE=App\CQRS\Middleware
 CQRS_AUTO_RESOLVE=true
 ```
 
-## Artisan Commands
+---
 
-The package includes convenient Artisan commands to generate CQRS files:
+## Artisan commands
 
-### Create a Command
+| Command | Generates |
+|---------|-----------|
+| `php artisan cqrs:command User/CreateUserCommand` | `app/CQRS/Commands/User/CreateUserCommand.php` |
+| `php artisan cqrs:query User/GetUserQuery` | `app/CQRS/Queries/User/GetUserQuery.php` |
+| `php artisan cqrs:handler User/CreateUserCommandHandler --type=command` | Command handler implementing `CommandHandlerInterface` |
+| `php artisan cqrs:handler User/GetUserQueryHandler --type=query` | Query handler implementing `QueryHandlerInterface` |
+| `php artisan cqrs:middleware User/TransactionMiddleware` | Middleware implementing `MiddlewareInterface` |
 
-```bash
-php artisan cqrs:command User/CreateUserCommand
-```
+Namespaces follow `config/cqrs.php` (`handler_namespace`, etc.).
 
-This creates: `app/CQRS/Commands/User/CreateUserCommand.php`
+---
 
-### Create a Query
-
-```bash
-php artisan cqrs:query User/GetUserQuery
-```
-
-This creates: `app/CQRS/Queries/User/GetUserQuery.php`
-
-### Create a Handler
-
-```bash
-# Create a command handler
-php artisan cqrs:handler User/CreateUserCommandHandler --type=command
-
-# Create a query handler
-php artisan cqrs:handler User/GetUserQueryHandler --type=query
-```
-
-This creates:
-- `app/CQRS/Handlers/User/CreateUserCommandHandler.php` (for commands)
-- `app/CQRS/Handlers/User/GetUserQueryHandler.php` (for queries)
-
-**Note:** The `--type` option is required for handlers to determine which interface and base class to use.
-
-### Create a Middleware
-
-```bash
-php artisan cqrs:middleware User/TransactionMiddleware
-```
-
-This creates: `app/CQRS/Middleware/User/TransactionMiddleware.php` (implements `LaravelCQRS\Contracts\MiddlewareInterface`). Register it in `config/cqrs.php` under `middleware.global` or per command/query.
-
-## Using Buses Directly
-
-You can also use the buses directly instead of the `CQRS` helper:
-
-```php
-use LaravelCQRS\Bus\CommandBus;
-use LaravelCQRS\Bus\QueryBus;
-
-// In controller
-public function __construct(
-    private CommandBus $commandBus,
-    private QueryBus $queryBus
-) {}
-
-public function store(Request $request): JsonResponse
-{
-    $command = new CreateUserCommand($request->all());
-    $command->validate(); // Manual validation
-    $user = $this->commandBus->dispatch($command);
-    return response()->json($user, 201);
-}
-```
-
-## Architecture Flow
+## Package architecture
 
 ```
-Route → Controller → CQRS::dispatch() → Validation → Middleware Pipeline → Handler → Repository
+src/
+├── Bus/
+│   ├── AbstractBus.php      # Handler resolution, middleware collection, pipeline execution
+│   ├── CommandBus.php
+│   └── QueryBus.php
+├── Console/                 # make:* commands + stubs
+├── Contracts/
+│   ├── CommandHandlerInterface.php
+│   ├── QueryHandlerInterface.php
+│   └── MiddlewareInterface.php
+├── Exceptions/
+│   ├── HandlerNotFoundException.php
+│   └── InvalidHandlerException.php
+├── Command.php
+├── Query.php
+├── CQRS.php                 # Static dispatch helpers
+├── Pipeline.php             # Middleware stack
+└── CQRSServiceProvider.php
+config/
+└── cqrs.php
 ```
 
-## Requirements
+**Namespaces in your app** (typical):
 
-- PHP >= 8.0
-- Laravel >= 9.0
+```
+app/CQRS/
+├── Commands/...
+├── Queries/...
+├── Handlers/...
+└── Middleware/...
+```
+
+---
+
+## Exceptions
+
+| Exception | When |
+|-----------|------|
+| `HandlerNotFoundException` | Handler class missing, or auto-resolve off with no mapping. |
+| `InvalidHandlerException` | Resolved class does not implement the expected handler interface. |
+| `Illuminate\Validation\ValidationException` | Failed `validate()` or `CQRS::dispatch(..., true)`. |
+
+---
 
 ## License
 
-MIT
+MIT. See the [`LICENSE`](LICENSE) file in the repository.
 
-## Support
+---
 
-For issues and questions, please open an issue on GitHub.
+## Changelog
+
+### 1.0.0
+
+- Initial release: `Command` / `Query` with Laravel validation integration.
+- `CommandBus` / `QueryBus` with configurable handler resolution and handler mappings.
+- `CQRS` helper for unified dispatch with optional validation.
+- Middleware pipeline (`Pipeline`, `MiddlewareInterface`) with global and per-message config.
+- `HandlerNotFoundException`, `InvalidHandlerException`.
+- Service provider: singleton buses, controller injection for empty commands/queries, Artisan generators.
+- Configuration: namespaces, `auto_resolve_handlers`, `handler_mappings`, `middleware`.
+
+Future versions will be listed here following [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/) principles.
